@@ -94,8 +94,6 @@ fi
   exit 1;
 fi
 
-
-
 if [ $stage -le 0 ]; then
   steps/online/nnet2/copy_data_dir.sh --utts-per-spk-max 2 data/train data/train_max2
 fi
@@ -103,7 +101,9 @@ fi
 if [ $stage -le 1 ]; then
   echo "$0: dumping egs for tar data"
   steps/online/nnet2/get_egs2.sh --cmd "$train_cmd" \
-    data/train_max2 ${tardir}_ali ${srcdir}_online ${dir}/egs
+    data/train_max2 ${tardir}_ali ${srcdir0}_online ${dir}/egs
+  steps/online/nnet2/get_egs2.sh --cmd "$train_cmd" \
+    data/train_max2 ${tardir}_ali ${srcdir1}_online ${dir}/egs
 fi
 
 if [ $stage -le 2 ]; then
@@ -113,38 +113,49 @@ if [ $stage -le 2 ]; then
   # (although a bit fewer for task_0, since we're not so concerned about the
   # performance of that system).
 
-  local/nnet2/train_multilang2.sh --num-jobs-nnet "1 1" \
+  local/nnet2/train_multilang2.sh --num-jobs-nnet "1 1 1" \
     --stage $train_stage \
-    --mix-up "0 4000" \
+    --mix-up "0 0 4000" \
     --cleanup true --num-epochs 8 \
     --initial-learning-rate 0.005 --final-learning-rate 0.0005 \
     --cmd "$train_cmd" --parallel-opts "$parallel_opts" --num-threads "$num_threads" \
-    --am-weight "$task_0 $task_1" \
-   $src_alidir $srcdir/egs ${tardir}_ali $dir/egs ${srcdir}_online/final.mdl $dir
+    --am-weight "$task_0 $task_1 $task_2" \
+   $src_alidir0 $srcdir0/egs $src_alidir1 $srcdir1/egs ${tardir}_ali $dir/egs ${srcdir0}_online/final.mdl $dir
+
 fi
  
 if [ $stage -le 3 ]; then
-  # Prepare the task_0 and task_1 setups for decoding, with config files
+  # Prepare the task_i setups for decoding, with config files
+ 
+  steps/online/nnet2/prepare_online_decoding_transfer.sh \
+    ${srcdir0}_online $src0_lang $dir/0 ${dir}_0_online
 
   steps/online/nnet2/prepare_online_decoding_transfer.sh \
-    ${srcdir}_online $src_lang $dir/0 ${dir}_0_online
+    ${srcdir1}_online $src1_lang $dir/1 ${dir}_1_online
+
 
   steps/online/nnet2/prepare_online_decoding_transfer.sh \
-    ${srcdir}_online data/lang $dir/1 ${dir}_1_online
+    ${srcdir0}_online $tarlang $dir/2 ${dir}_2_0_online
+
+  steps/online/nnet2/prepare_online_decoding_transfer.sh \
+    ${srcdir1}_online $tarlang $dir/2 ${dir}_2_1_online
 fi
 
 if [ $stage -le 4 ]; then
   # Decoding
   
   for file in dev test; do
-  
-     # Decoding for task_0
+     # Decoding for task_0 
      local/online/nnet2/decode.sh --config conf/decode.config --cmd "$decode_cmd" --nj 10 \
-        $src_dir_graph data_code-switch-Inf-Ph/${file} ${dir}_0_online/decode_0_${file}
-     
-     # Decoding for task_1
+        $src_dir0_graph $src0_data/${file} ${dir}_0_online/decode_0_${file} || exit 1;
+     # Decodeing for task_1
      local/online/nnet2/decode.sh --config conf/decode.config --cmd "$decode_cmd" --nj 10 \
-        $tardir/graph data/${file} ${dir}_1_online/decode_1_${file}
+        $src_dir1_graph $src1_data/${file} ${dir}_1_online/decode_1_${file} || exit 1;
+     # Decoding for task_2
+     local/online/nnet2/decode.sh --config conf/decode.config --cmd "$decode_cmd" --nj 10 \
+        $tardir/graph $tardata/${file} ${dir}_2_0_online/decode_2_0_${file} || exit 1;
+     local/online/nnet2/decode.sh --config conf/decode.config --cmd "$decode_cmd" --nj 10 \
+        $tardir/graph $tardata/${file} ${dir}_2_1_online/decode_2_1_${file} || exit 1;
   done
   wait
 fi
